@@ -1,0 +1,45 @@
+[
+  {
+    "name": "NID",
+    "value": "521=eEjSMXCbEYLi-tN9-4uL0ZMdXzl7pyE3xPyS0lmsvzMCkCHDomKxAqpfdMCcjgu7LFkQvviL5I_zOPwbBiTXRt6oRBo2F59th785mAIC28It9OVXa8nV-tnZ8Wqkz6cT3kB16Gz7LmDvJq8x9-ipsJAdvPasUmtzHqBw4FAbo3F-_XFTvM9DYHfopWGs8zpDb4Y",
+    "domain": ".google.com",
+    "path": "/",
+    "expires": 1755891883.350881,
+    "size": 202,
+    "httpOnly": true,
+    "secure": true,
+    "session": false,
+    "sameSite": "None",
+    "priority": "Medium",
+    "sameParty": false,
+    "sourceScheme": "Secure"
+  },
+  {
+    "name": "OTZ",
+    "value": "7962945_68_68_134100_72_406320",
+    "domain": "accounts.google.com",
+    "path": "/",
+    "expires": 1742672680,
+    "size": 33,
+    "httpOnly": false,
+    "secure": true,
+    "session": false,
+    "priority": "Medium",
+    "sameParty": false,
+    "sourceScheme": "Secure"
+  },
+  {
+    "name": "__Host-GAPS",
+    "value": "1:ksh8qQEQWEuMeFtYRsczJ7skLa812g:sW7HNMG_uQqibStR",
+    "domain": "accounts.google.com",
+    "path": "/",
+    "expires": 1774640677.754088,
+    "size": 60,
+    "httpOnly": true,
+    "secure": true,
+    "session": false,
+    "priority": "High",
+    "sameParty": false,
+    "sourceScheme": "Secure"
+  }
+]
