@@ -8,11 +8,68 @@ const querys = require("../../data/querys");
 
 require("dotenv").config({ path: require("find-config")("../../.env") });
 
+// Evita que un crash de bajo nivel (p.ej. el pipe con Chrome) tumbe el proceso
+// sin dejar rastro y sin liberar el lock del script.
+process.on("uncaughtException", (err) => {
+  console.error("💥 uncaughtException:", err);
+  liberarLockProceso();
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("💥 unhandledRejection:", err);
+  liberarLockProceso();
+  process.exit(1);
+});
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// === NUEVO: perfil persistente y binario opcional ===
-const CHROME_PROFILE_DIR = process.env.CHROME_PROFILE_DIR || ""; // p.ej. /home/ubuntu/.config/chrome-profiles/docs2
-const CHROME_BIN = process.env.CHROME_BIN || null;               // p.ej. /usr/bin/google-chrome
+// === PERFIL Y BINARIO FIJOS (usa siempre el perfil docs) ===
+const CHROME_PROFILE_DIR = "/home/ubuntu/.config/chrome-profiles/docs2";
+const CHROME_BIN = "/usr/bin/google-chrome"; // o cambia si tu binario está en otra ruta
+
+// Lock a nivel de script: evita que dos corridas (p.ej. cron solapado)
+// choquen sobre el mismo perfil persistente de Chrome, que es lo que
+// produce el "ECONNRESET" al lanzar una segunda instancia sobre un
+// perfil ya tomado por la corrida anterior.
+const LOCK_FILE = path.join(__dirname, ".actualiza_ventas_v2.lock");
+
+function adquirirLockProceso() {
+  if (fs.existsSync(LOCK_FILE)) {
+    const pid = parseInt(fs.readFileSync(LOCK_FILE, "utf8").trim(), 10);
+    const vivo = pid && (() => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    })();
+    if (vivo) {
+      console.error(`⛔ Ya hay una ejecución en curso (PID ${pid}). Abortando para no chocar con el perfil de Chrome.`);
+      process.exit(1);
+    }
+    console.warn(`🧹 Lock huérfano de un PID ${pid} que ya no existe. Se limpia.`);
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+}
+
+function liberarLockProceso() {
+  try { fs.unlinkSync(LOCK_FILE); } catch {}
+}
+
+// Limpia los archivos de lock que Chrome deja en el perfil persistente
+// cuando una corrida anterior murió sin cerrar limpiamente (exactamente
+// el escenario del crash: el proceso se cae antes de llegar al
+// `finally { browser.close() }`), lo que impide que el próximo Chrome
+// tome ese mismo userDataDir y lo hace morir de inmediato.
+function limpiarLockPerfilChrome(profileDir) {
+  for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const p = path.join(profileDir, f);
+    try {
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        console.log(`🧹 Lock stale de Chrome eliminado: ${p}`);
+      }
+    } catch (e) {
+      console.warn(`⚠️ No se pudo eliminar ${p}:`, e.message);
+    }
+  }
+}
 
 function looksLikeGoogleLogin(url) {
   const pats = ["accounts.google.com", "/ServiceLogin", "/signin", "identifier?"];
@@ -20,28 +77,29 @@ function looksLikeGoogleLogin(url) {
 }
 
 /**
- * Usa un perfil persistente (CHROME_PROFILE_DIR) que ya debe tener sesión iniciada en Google.
- * Visita la hoja y luego la URL de exportación. Descarga el CSV en ./downloads.
+ * Usa un perfil persistente fijo ("docs") con sesión ya iniciada en Google.
+ * Descarga el CSV en ./downloads.
  */
 async function downloadGoogleSheetAsCSV() {
-  // URL de tu Google Sheet (edit)
   const sheetUrl =
     "https://docs.google.com/spreadsheets/d/1FvlZU1AUJoKrdLrtNaxo9nGBZvTAhligVbaEhDrp7XU/edit#gid=1765604646";
 
-  // Carpeta de descarga
   const downloadPath = path.resolve(__dirname, "./downloads");
   if (!fs.existsSync(downloadPath)) fs.mkdirSync(downloadPath, { recursive: true });
 
-  // Limpia CSV previos
   for (const f of fs.readdirSync(downloadPath)) {
     if (f.endsWith(".csv")) {
       try { fs.unlinkSync(path.join(downloadPath, f)); } catch {}
     }
   }
 
-  // Lanza Puppeteer con perfil persistente
+  limpiarLockPerfilChrome(CHROME_PROFILE_DIR);
+
   const launchOpts = {
-    headless: true, // si quieres depurar, cambia a false
+    headless: true,
+    dumpio: true, // saca el stderr real de Chrome al log si vuelve a morir al lanzar
+    executablePath: CHROME_BIN,
+    userDataDir: CHROME_PROFILE_DIR,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -50,61 +108,62 @@ async function downloadGoogleSheetAsCSV() {
       "--no-default-browser-check",
       "--password-store=basic",
       "--use-mock-keychain",
+      "--disable-gpu",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--metrics-recording-only",
+      "--mute-audio",
+      "--disable-client-side-phishing-detection",
+      "--disable-sync",
+      "--disable-features=Translate,PrivacySandboxSettings4",
     ],
   };
-  if (CHROME_BIN) {
-    launchOpts.executablePath = CHROME_BIN;
-  }
-  if (CHROME_PROFILE_DIR) {
-    launchOpts.userDataDir = CHROME_PROFILE_DIR;
-    console.log("🗂  Usando perfil persistente:", CHROME_PROFILE_DIR);
-  } else {
-    console.log("🗂  Perfil temporal (sin CHROME_PROFILE_DIR).");
-  }
+
+  console.log("🗂  Usando perfil persistente:", CHROME_PROFILE_DIR);
+  console.log("🧭 Ejecutando Chrome desde:", CHROME_BIN);
 
   const browser = await puppeteer.launch(launchOpts);
 
   try {
+    browser.on("disconnected", () => {
+      console.error("⚠️ Chrome se desconectó (Target closed). Revisa el binario o el perfil.");
+    });
+
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(90000);
     await page.setUserAgent(
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
     );
 
-    // 1) Visitar la hoja (debería abrir sin pedir login si el perfil tiene sesión)
-    console.log("➡️ Abriendo hoja (edit) para validar sesión/cookies…");
-    await page.goto(sheetUrl, { waitUntil: "networkidle2", timeout: 90000 });
-    await sleep(2000);
-
-    const urlNow = page.url();
-    if (looksLikeGoogleLogin(urlNow)) {
-      throw new Error(
-        "El perfil no tiene sesión válida (redirige a login). Abre el navegador con ese userDataDir por VNC, inicia sesión y vuelve a correr."
-      );
-    }
-
-    // 2) Permitir descargas en `downloadPath` vía CDP (método legacy)
+    // Permitir descarga
     const cdp = await page.target().createCDPSession();
     await cdp.send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath,
     });
 
-    // 3) Armar URL de exportación CSV
-    //    Si tu sheet requiere un gid específico, agrega &gid=<gid>
-    const base = sheetUrl.split("/edit")[0];
-    const exportUrl = `${base}/export?format=csv&gid=1765604646`;
-
-    // 4) Disparar descarga
-    console.log("⬇️ Descargando CSV con page.goto(exportUrl)…");
+    // No cargamos el editor completo (/edit): es una SPA muy pesada en JS/WebGL
+    // que en headless sin GPU cae a software rendering y puede tumbar Chrome
+    // por memoria en servidores chicos (eso es lo que produce el "Target closed").
+    // La sesión se valida directo contra la URL de export, que es liviana.
+    const exportUrl = `${sheetUrl.split("/edit")[0]}/export?format=csv&gid=1765604646`;
+    console.log("⬇️ Descargando CSV (validando sesión directo contra el export)...");
     try {
-      await page.goto(exportUrl, { waitUntil: "networkidle2", timeout: 90000 });
+      await page.goto(exportUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
     } catch (err) {
       if (!String(err.message).includes("net::ERR_ABORTED")) throw err;
     }
 
-    // 5) Esperar a que el archivo aparezca
-    const waitEnd = Date.now() + 15000; // hasta 15s
+    if (looksLikeGoogleLogin(page.url())) {
+      throw new Error(
+        "El perfil DOCS no tiene sesión válida. Abre VNC, inicia sesión en Google en ese perfil y vuelve a ejecutar."
+      );
+    }
+
+    // Esperar hasta 15 segundos que aparezca el CSV
+    const waitEnd = Date.now() + 15000;
     let csvPath = null;
     while (Date.now() < waitEnd) {
       const files = fs
@@ -130,38 +189,51 @@ async function downloadGoogleSheetAsCSV() {
 }
 
 /**
- * Procesa el CSV descargado para actualizar la base de datos
+ * Procesa el CSV descargado y actualiza la base de datos
  */
 async function leeGoogleSheet() {
   try {
     console.clear();
-    console.log("Iniciando proceso de descarga...");
+    console.log("🚀 Iniciando proceso de descarga...");
     const csvPath = await downloadGoogleSheetAsCSV();
 
-    console.log("Procesando archivo CSV...");
+    console.log("📖 Procesando archivo CSV...");
     const rows = [];
 
-    await new Promise((resolve, reject) => {
-      fs.createReadStream(csvPath)
-        .pipe(csvParser({ headers: false }))
-        .on("data", (row) => {
-          const rowArray = Object.values(row);
-          const maxColumns = 13; // Ajusta según columnas esperadas
-          const filledRow = [...rowArray, ...Array(maxColumns - rowArray.length).fill(null)];
-          rows.push(filledRow);
-        })
-        .on("end", resolve)
-        .on("error", reject);
+   await new Promise((resolve, reject) => {
+  let lineNumber = 0;
+
+  fs.createReadStream(csvPath)
+    .pipe(csvParser({ headers: false }))
+    .on("data", (row) => {
+      lineNumber++;
+      const rowArray = Object.values(row);
+      console.log(`📄 Línea ${lineNumber}:`, rowArray); // 🔹 Muestra el número de línea y su contenido completo
+
+      const maxColumns = 13;
+      const filledRow = [...rowArray, ...Array(maxColumns - rowArray.length).fill(null)];
+      rows.push(filledRow);
+    })
+    .on("end", () => {
+      console.log(`✅ Lectura de CSV finalizada. Total de líneas: ${lineNumber}`);
+      resolve();
+    })
+    .on("error", (err) => {
+      console.error("❌ Error leyendo el CSV:", err.message);
+      reject(err);
     });
+});
 
     const clienteID = "5";
-
     const hoy = new Date();
     const ano = hoy.getFullYear();
     const mes = hoy.getMonth() + 1;
+      
+      const filaInicio = 19123;
 
-    const filaInicio = 11740;
-
+  //const ano ="2026";
+ // const mes ="06";
+      
     const res_fec_mes = await pool.query(querys.obtieneMesID(ano, mes));
     const MesVentaID = res_fec_mes.rows[0].mes_venta_id;
 
@@ -181,8 +253,9 @@ async function leeGoogleSheet() {
         const rut = row[1]?.trim();
         const telefono = row[4]?.trim();
         const contrato = row[7]?.toString().trim();
-        const estado = row[11]?.toString().toUpperCase();
-
+        let estadoRaw = row[11]?.toString().trim();  
+        const estado = estadoRaw ? estadoRaw.toUpperCase() : "PENDIENTE";
+        
         const rawFechaIngreso = row[0]?.toString().trim().replace(/\u200B/g, "");
         const rawFechaContrato = row[8]?.toString().trim();
         const rawFechaFuga = row[10]?.toString().trim();
@@ -231,7 +304,7 @@ async function leeGoogleSheet() {
         let beneficiarios = 0;
         const beneficiariosRaw = row[9]?.trim();
         if (beneficiariosRaw) {
-          const beneficiariosMap = {
+          const map = {
             "2.99999999999999": 3,
             "0.799999999999999": 1,
             "0.8": 1,
@@ -242,8 +315,7 @@ async function leeGoogleSheet() {
             "5.99999999999999": 6,
             "6.99999999999999": 7,
           };
-          beneficiarios =
-            beneficiariosMap[beneficiariosRaw] || parseInt(beneficiariosRaw) || 0;
+          beneficiarios = map[beneficiariosRaw] || parseInt(beneficiariosRaw) || 0;
         }
 
         if (contrato !== "DUPLICADO") {
@@ -263,54 +335,10 @@ async function leeGoogleSheet() {
         }
       }
 
-      // Hacer updates en DB
+      // === UPDATE EN BASE ===
       for (const update of updates) {
         try {
-          let actual_campana_id = null;
-          let actual_telefono = null;
-          let actual_estado = null;
-
-          const debugQuery = `
-            SELECT 
-                  ven_eje_campana_id,
-                  ven_eje_telefono,
-                  ven_eje_respuesta_estado,
-                  ven_eje_rut_cliente
-            FROM genesys_backend.cx_venta_ejecutivo
-            WHERE
-               ven_eje_mes_venta_id = $1
-              AND ven_eje_rut_cliente = TRIM($2)
-          `;
-          const debugVals = [update.MesVentaID, update.rut];
-          const existingRows = await pool.query(debugQuery, debugVals);
-
-          if (existingRows.rows.length > 0) {
-            const firstRow = existingRows.rows[0];
-            actual_campana_id = firstRow.ven_eje_campana_id;
-            actual_telefono = firstRow.ven_eje_telefono;
-            actual_estado = firstRow.ven_eje_respuesta_estado;
-          } else {
-            const debugQRut = `
-              SELECT 
-                    ven_eje_campana_id,
-                    ven_eje_respuesta_estado
-              FROM genesys_backend.cx_venta_ejecutivo
-              WHERE
-                ven_eje_mes_venta_id = $1
-                AND ven_eje_telefono = $2
-            `;
-            const debugVRut = [update.MesVentaID, update.telefono];
-            const existRut = await pool.query(debugQRut, debugVRut);
-            const firstRowRut = existRut.rows[0];
-            if (firstRowRut) {
-              console.log(
-                `NO ENCONTRADO POR RUT, ${update.rut} , ${update.telefono}, ${update.campanaID}, CAMPANA ACTUAL : ${firstRowRut.ven_eje_campana_id}, ESTADO ACTUAL : ${firstRowRut.ven_eje_respuesta_estado}`
-              );
-            } else {
-              console.log(`NO ENCONTRADO, ${update.rut} , ${update.telefono}, ${update.campanaID}`);
-            }
-          }
-
+          console.log(`Intentando update para RUT ${update.rut} con:`, update);
           const query = `
             UPDATE genesys_backend.cx_venta_ejecutivo
             SET
@@ -326,10 +354,11 @@ async function leeGoogleSheet() {
               AND ven_eje_telefono = TRIM($9)
               AND ven_eje_mes_venta_id = $10
               AND ven_eje_rut_cliente = TRIM($11)
-              AND ven_eje_respuesta_estado NOT IN (
-                'DUPLICADO','RECHAZA VENTA','CORTA','RECHAZADA POR COMPRA EN CYBER',
-                'EXITOSO','TIMEOUT','RECHAZADA POR CALIDAD','RETRACTO'
-              )
+              AND COALESCE(ven_eje_respuesta_estado, '') NOT IN (
+              'DUPLICADO','RECHAZA VENTA','CORTA',
+              'RECHAZADA POR COMPRA EN CYBER',
+              'EXITOSO','TIMEOUT','RECHAZADA POR CALIDAD','RETRACTO'
+            )
           `;
           const values = [
             update.fecha_ingreso,
@@ -346,82 +375,29 @@ async function leeGoogleSheet() {
           ];
 
           const result = await pool.query(query, values);
-
           if (result.rowCount > 0) {
-            console.log(update.rut, ": ACTUALIZADO", update.fecha_ingreso);
-          } else {
-            if (actual_estado !== "EXITOSO" && update.estado === "EXITOSO" && update.contrato === "SI") {
-              console.log(
-                `NO SE ACTUALIZA,${actual_campana_id},${update.fecha_ingreso},${update.rut},${update.telefono},${actual_estado},` +
-                  `${update.campanaID},${update.rut},${update.telefono},${update.estado}`
-              );
+              console.log(update.rut, ": ✅ ACTUALIZADO", update.fecha_ingreso);
+            } else {
+              console.warn(update.rut, ": ⚠️ NO SE ACTUALIZÓ - no encontró coincidencia en el WHERE");
             }
-          }
         } catch (error) {
-          console.error(`ERROR AL ACTUALIZAR, ${update.rut}`, error.message);
+          console.error(`❌ Error al actualizar ${update.rut}:`, error.message);
         }
       }
-
-      // Updates masivos según reglas
-      let queryU1 = `
-        UPDATE genesys_backend.cx_venta_ejecutivo
-        SET ven_eje_respuesta_estado = 'PENDIENTE POR RED SALUD'
-        WHERE
-          ven_eje_cliente_id = '${clienteID}'
-          AND ven_eje_campana_id = '${campanaID}'
-          AND ven_eje_respuesta_contrato='NO'
-          AND ven_eje_respuesta_estado = 'EXITOSO'
-          AND ven_eje_mes_venta_id='${MesVentaID}'
-      `;
-      await pool.query(queryU1);
-
-      let queryU2 = `
-        UPDATE genesys_backend.cx_venta_ejecutivo
-        SET ven_eje_respuesta_estado = 'PENDIENTE POR RED SALUD'
-        WHERE
-          ven_eje_cliente_id = '${clienteID}'
-          AND ven_eje_campana_id = '${campanaID}'
-          AND ven_eje_mes_venta_id='${MesVentaID}'
-          AND (
-            ven_eje_respuesta_estado in ('','PENDIENTE')
-            OR ven_eje_respuesta_estado is null
-          )
-      `;
-      await pool.query(queryU2);
-
-      let queryU3 = `
-        UPDATE genesys_backend.cx_venta_ejecutivo
-        SET ven_eje_respuesta_estado = 'RECUPERADA Y PENDIENTE POR RED SALUD'
-        WHERE
-          ven_eje_cliente_id = '${clienteID}'
-          AND ven_eje_campana_id = '${campanaID}'
-          AND ven_eje_respuesta_estado in ('NO INGRESA','FALLIDO')
-          AND ven_eje_recuperado_por > 0
-          AND ven_eje_mes_venta_id='${MesVentaID}'
-      `;
-      await pool.query(queryU3);
-
-      let queryU4 = `
-        UPDATE genesys_backend.cx_venta_ejecutivo
-        SET ven_eje_respuesta_estado = 'RETRACTO'
-        WHERE
-          ven_eje_cliente_id = '${clienteID}'
-          AND ven_eje_campana_id = '${campanaID}'
-          AND ven_eje_respuesta_contrato='RETRACTO'
-          AND ven_eje_mes_venta_id='${MesVentaID}'
-      `;
-      await pool.query(queryU4);
     }
   } catch (error) {
-    console.error("Error en leeGoogleSheet:", error.message, error.stack);
+    console.error("❌ Error en leeGoogleSheet:", error.message);
   }
 }
 
 (async () => {
+  adquirirLockProceso();
   try {
     await leeGoogleSheet();
-    console.log("Proceso finalizado correctamente.");
+    console.log("🏁 Proceso finalizado correctamente.");
   } catch (error) {
-    console.error("Error en el proceso completo:", error.message);
+    console.error("❌ Error en el proceso completo:", error.message);
+  } finally {
+    liberarLockProceso();
   }
 })();
