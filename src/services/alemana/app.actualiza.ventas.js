@@ -171,7 +171,7 @@ const extraerDatos = async () => {
     // que basta con recorrer las primeras N páginas: seguir paginando hacia
     // atrás solo procesa ventas de meses ya cerrados que jamás van a hacer
     // match con el ven_eje_mes_venta_id del mes actual.
-    const MAX_PAGINAS = 20;
+    const MAX_PAGINAS = 100;
     let pageNumber = 1;
 
     while (true) {
