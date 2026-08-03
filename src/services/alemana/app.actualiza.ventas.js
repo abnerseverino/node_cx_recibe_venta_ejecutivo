@@ -167,6 +167,11 @@ const extraerDatos = async () => {
 
     console.log("✅ Inicio de sesión exitoso.");
 
+    // El portal lista las propuestas de más reciente a más antigua, así
+    // que basta con recorrer las primeras N páginas: seguir paginando hacia
+    // atrás solo procesa ventas de meses ya cerrados que jamás van a hacer
+    // match con el ven_eje_mes_venta_id del mes actual.
+    const MAX_PAGINAS = 20;
     let pageNumber = 1;
 
     while (true) {
@@ -237,6 +242,11 @@ const extraerDatos = async () => {
             error.message
           );
         }
+      }
+
+      if (pageNumber >= MAX_PAGINAS) {
+        console.log(`✅ Se alcanzó el límite de ${MAX_PAGINAS} páginas. Finalizando.`);
+        break;
       }
 
       // ---- Paginar ----
