@@ -6,6 +6,7 @@ const querys = require("../../data/querys");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const capturaLooker = async () => {
+  let browser;
   try {
     const hoy = new Date();
     //const ano = hoy.getFullYear();
@@ -17,7 +18,7 @@ const capturaLooker = async () => {
     const res_fec_mes = await pool.query(querys.obtieneMesID(ano, mes));
     const MesVentaID = res_fec_mes.rows[0].mes_venta_id;
 
-    const browser = await puppeteer.launch({
+    browser = await puppeteer.launch({
       headless: "new",
       defaultViewport: null,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -198,11 +199,17 @@ const capturaLooker = async () => {
     `;
     await pool.query(ajusteQuery, [MesVentaID]);
     console.log("✅ Ajuste final aplicado a ven_eje_venta_adicional");
-
-    await browser.close();
-    pool.end();
   } catch (error) {
     console.error("❌ Error en la ejecución del script:", error.message);
+  } finally {
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {}
+    }
+    try {
+      await pool.end();
+    } catch {}
   }
 };
 
