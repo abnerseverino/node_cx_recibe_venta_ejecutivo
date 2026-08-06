@@ -12,8 +12,8 @@ require("dotenv").config({ path: require("find-config")("../../.env") });
 const { pool } = require("../../config/conexion");
 const querys = require("../../data/querys");
 
-const s3 = new S3Client({ region: "us-east-1" });
-const bucketName = "bucket-cx-sftp";
+const s3 = new S3Client({ region: process.env.AWS_REGION || "us-east-1" });
+const bucketName = process.env.AWS_S3_BUCKET || "bucket-cx-sftp";
 const prefix = "colmena/in/reportes/";
 const localDir = path.resolve(__dirname, "../../../ENTRADA/Colmena");
 
