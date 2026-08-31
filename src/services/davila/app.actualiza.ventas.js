@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { pool } = require("../../config/conexion");
 const puppeteer = require("puppeteer");
 const { convertirFecha } = require("../../helpers/dates");
@@ -5,22 +7,45 @@ const querys = require("../../data/querys");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Perfil dedicado con sesión de Google logueada (mismo que usa AndesSalud):
+// el reporte de davila también empezó a exigir login, y Chrome bloquea el
+// debugging remoto de Puppeteer sobre el perfil de escritorio por defecto,
+// así que hay que usar un perfil propio, no el default.
+const CHROME_PROFILE_DIR = "/home/ubuntu/.config/chrome-profiles/andessalud";
+// Ese perfil lo mantiene el Chrome real de escritorio (v141+), muy por
+// delante del Chromium que trae empaquetado el paquete "puppeteer": abrir
+// el perfil con una versión tan distinta hace crashear Chrome al instante.
+const CHROME_BIN = "/usr/bin/google-chrome";
+
+function limpiarLockPerfilChrome(profileDir) {
+  for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const p = path.join(profileDir, f);
+    try {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    } catch {}
+  }
+}
+
 const capturaLooker = async () => {
   let browser;
   try {
     const hoy = new Date();
-    //const ano = hoy.getFullYear();
-    //const mes = hoy.getMonth() + 1;
+    const ano = hoy.getFullYear();
+    const mes = hoy.getMonth() + 1;
 
-    const ano = "2025";
-    const mes = "07";
-      
+   // const ano = "2026";
+   // const mes = "07";
+
     const res_fec_mes = await pool.query(querys.obtieneMesID(ano, mes));
     const MesVentaID = res_fec_mes.rows[0].mes_venta_id;
+
+    limpiarLockPerfilChrome(CHROME_PROFILE_DIR);
 
     browser = await puppeteer.launch({
       headless: "new",
       defaultViewport: null,
+      executablePath: CHROME_BIN,
+      userDataDir: CHROME_PROFILE_DIR,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
@@ -30,7 +55,7 @@ const capturaLooker = async () => {
     );
 
     const lookerURL =
-      "https://lookerstudio.google.com/u/0/reporting/3a97ace1-9981-4e08-a99b-7e439a960812/page/sAMLE";
+      "https://datastudio.google.com/u/5/reporting/745213f7-e6f9-498c-b6fa-f053a047f18a/page/sAMLE";
     await page.goto(lookerURL, {
       waitUntil: "networkidle2",
       timeout: 120000,
@@ -50,7 +75,7 @@ const capturaLooker = async () => {
 
     console.log(`🔍 Total de registros detectados: ${totalRecords}`);
 
-    while (pageCount <= 4) { 
+    while (pageCount <= 3) { 
       let registrosCapturados = new Set();
       let intentos = 0;
 
