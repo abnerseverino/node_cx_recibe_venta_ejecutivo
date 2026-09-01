@@ -26,15 +26,21 @@ function limpiarLockPerfilChrome(profileDir) {
   }
 }
 
+// Permite forzar un mes puntual con --ano=YYYY --mes=M (ej. para correr un
+// mes ya cerrado a mano); sin esos argumentos usa el mes actual.
+function obtenerAnoMes() {
+  const argAno = process.argv.find((a) => a.startsWith("--ano="));
+  const argMes = process.argv.find((a) => a.startsWith("--mes="));
+  const hoy = new Date();
+  const ano = argAno ? parseInt(argAno.split("=")[1], 10) : hoy.getFullYear();
+  const mes = argMes ? parseInt(argMes.split("=")[1], 10) : hoy.getMonth() + 1;
+  return { ano, mes };
+}
+
 const capturaLooker = async () => {
   let browser;
   try {
-    const hoy = new Date();
-    const ano = hoy.getFullYear();
-    const mes = hoy.getMonth() + 1;
-
-   // const ano = "2026";
-   // const mes = "07";
+    const { ano, mes } = obtenerAnoMes();
 
     const res_fec_mes = await pool.query(querys.obtieneMesID(ano, mes));
     const MesVentaID = res_fec_mes.rows[0].mes_venta_id;

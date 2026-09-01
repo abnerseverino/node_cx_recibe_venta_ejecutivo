@@ -19,6 +19,19 @@ const localDir = path.resolve(__dirname, "../../../ENTRADA/Colmena");
 
 const campanaID = 43;
 
+// Permite forzar un mes puntual con --ano=YYYY --mes=M (ej. para correr un
+// mes ya cerrado a mano); sin esos argumentos usa el mes actual. No afecta
+// el filtro de archivos hoy/ayer de S3 (esDeHoyOAyer), que siempre usa la
+// fecha real: solo cambia contra qué MesVentaID se actualiza en la BD.
+function obtenerAnoMes() {
+  const argAno = process.argv.find((a) => a.startsWith("--ano="));
+  const argMes = process.argv.find((a) => a.startsWith("--mes="));
+  const hoy = new Date();
+  const ano = argAno ? parseInt(argAno.split("=")[1], 10) : hoy.getFullYear();
+  const mes = argMes ? parseInt(argMes.split("=")[1], 10) : hoy.getMonth() + 1;
+  return { ano, mes };
+}
+
 /** true si `fecha` cae el mismo día calendario que `hoy` o que `ayer` */
 function esDeHoyOAyer(fecha) {
   const hoy = new Date();
@@ -150,9 +163,7 @@ async function actualizaRegistro({ rut, poliza, fechaEmision, MesVentaID }) {
 
 (async () => {
   try {
-    const hoy = new Date();
-    const ano = hoy.getFullYear();
-    const mes = hoy.getMonth() + 1;
+    const { ano, mes } = obtenerAnoMes();
 
     const resMes = await pool.query(querys.obtieneMesID(ano, mes));
     const MesVentaID = resMes.rows?.[0]?.mes_venta_id;
