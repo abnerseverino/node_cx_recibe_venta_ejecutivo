@@ -117,10 +117,19 @@ async function esperarCambioTabla(page, primeraCeldaAntes) {
   return false;
 }
 
-const extraerDatos = async () => {
+// Permite forzar un mes puntual con --ano=YYYY --mes=M (ej. para correr un
+// mes ya cerrado a mano); sin esos argumentos usa el mes actual.
+function obtenerAnoMes() {
+  const argAno = process.argv.find((a) => a.startsWith("--ano="));
+  const argMes = process.argv.find((a) => a.startsWith("--mes="));
   const hoy = new Date();
-  const ano = hoy.getFullYear();
-  const mes = hoy.getMonth() + 1;
+  const ano = argAno ? parseInt(argAno.split("=")[1], 10) : hoy.getFullYear();
+  const mes = argMes ? parseInt(argMes.split("=")[1], 10) : hoy.getMonth() + 1;
+  return { ano, mes };
+}
+
+const extraerDatos = async () => {
+  const { ano, mes } = obtenerAnoMes();
 
   let browser;
 
