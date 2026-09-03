@@ -150,7 +150,7 @@ async function leerTablaCompleta(page, wrapperHandle, maxPaginas) {
  * no respeta la protección de "no pisar estados finales" — a pedido
  * explícito, para que RETRACTO se aplique aunque la venta ya esté EXITOSO.
  */
-async function actualizaRegistro({ certificado, rut, fecha_contrato, beneficiarios, estado, MesVentaID, forzar }) {
+async function actualizaRegistro({ certificado, rut, fecha_contrato, beneficiarios, estado, MesVentaID, forzar, sucursal }) {
   const query1 = forzar
     ? `
       UPDATE genesys_backend.cx_venta_ejecutivo
@@ -190,20 +190,21 @@ async function actualizaRegistro({ certificado, rut, fecha_contrato, beneficiari
   }
 
   try {
-    // Sin la protección de estados finales: certificado y beneficiarios no
-    // son un estado de negocio, así que se refrescan siempre, incluso en
-    // filas ya EXITOSO donde Query1 no llega a tocarlas.
+    // Sin la protección de estados finales: certificado, sucursal y
+    // beneficiarios no son un estado de negocio, así que se refrescan
+    // siempre, incluso en filas ya EXITOSO donde Query1 no llega a tocarlas.
     const query2 = `
       UPDATE genesys_backend.cx_venta_ejecutivo
       SET
         ven_eje_respuesta_beneficiarios = $1,
-        ven_eje_n_certificado = $4
+        ven_eje_n_certificado = $4,
+        ven_eje_sucursal = $5
       WHERE
         ven_eje_campana_id = ${campanaID} AND
         ven_eje_mes_venta_id = $2 AND
         ven_eje_rut_cliente = $3;
     `;
-    await pool.query(query2, [beneficiarios, MesVentaID, rut, certificado]);
+    await pool.query(query2, [beneficiarios, MesVentaID, rut, certificado, sucursal || null]);
   } catch (error) {
     console.error(`❌ Error Query2 (beneficiarios/certificado) rut ${rut}:`, error.message);
   }
@@ -297,8 +298,9 @@ const capturaLooker = async () => {
       const certificado = row[0];
       const rut = row[1];
       const fechaCompraRaw = row[8];
+      const sucursal = row[11];
       if (!porCertificado.has(certificado)) {
-        porCertificado.set(certificado, { rut, fechaCompraRaw, count: 0 });
+        porCertificado.set(certificado, { rut, fechaCompraRaw, sucursal, count: 0 });
       }
       porCertificado.get(certificado).count++;
     }
@@ -320,6 +322,7 @@ const capturaLooker = async () => {
         estado: "EXITOSO",
         MesVentaID,
         forzar: false,
+        sucursal: info.sucursal,
       });
     }
 
@@ -331,6 +334,7 @@ const capturaLooker = async () => {
 
       const certificado = row[0];
       const rut = row[1];
+      const sucursal = row[4];
       const fechaSuscripcionRaw = row[6];
       const beneficiarios = parseInt(row[11]) || 0;
 
@@ -350,6 +354,7 @@ const capturaLooker = async () => {
         estado: "RETRACTO",
         MesVentaID,
         forzar: true,
+        sucursal,
       });
     }
 
