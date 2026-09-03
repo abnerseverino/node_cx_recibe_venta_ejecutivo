@@ -21,6 +21,53 @@ const CHROME_BIN = "/usr/bin/google-chrome";
 
 const campanaID = 78;
 
+// Encabezados reales de cada tabla del reporte (mismo orden que las
+// columnas capturadas), usados solo para armar el snapshot crudo que se
+// guarda en cx_venta_looker — no afectan el mapeo de negocio.
+const VENTAS_HEADERS = [
+  "Certificado", "Rut titular", "Nombre titular", "Correo titular",
+  "Edad titular", "Rut Asegurado", "Rut Vendedor", "Ejecutivo",
+  "Fecha compra", "Inicio vigencia", "Tipo pago", "Sucursal", "Plan",
+];
+const BAJAS_HEADERS = [
+  "N°Certificado", "Rut titular", "Nombre titular", "Plan", "Sucursal",
+  "Rut Vendedor", "Fecha suscripción", "Fecha baja", "Motivo baja",
+  "Días de suscripción", "Cuotas pagadas", "Cantidad dada baja",
+];
+
+function filaAObjeto(headers, row) {
+  const obj = {};
+  headers.forEach((h, i) => (obj[h] = row[i] ?? null));
+  return obj;
+}
+
+/**
+ * Guarda (upsert) el snapshot crudo de un certificado tal como vino del
+ * Looker, sin importar si matcheó o no con cx_venta_ejecutivo — para no
+ * seguir perdiendo la data de los "rut no encontrado" ni las columnas que
+ * hoy no se usan (Nombre, Correo, Motivo baja, etc.).
+ */
+async function guardaRawLooker({ tablaOrigen, certificado, rut, filasRaw, MesVentaID }) {
+  try {
+    await pool.query(
+      `INSERT INTO genesys_backend.cx_venta_looker
+         (ven_loo_cliente, ven_loo_tabla_origen, ven_loo_campana_id,
+          ven_loo_mes_venta_id, ven_loo_n_certificado, ven_loo_rut_cliente,
+          ven_loo_datos, ven_loo_fecha_captura)
+       VALUES ('andesSalud', $1, $2, $3, $4, $5, $6::jsonb, now())
+       ON CONFLICT (ven_loo_cliente, ven_loo_tabla_origen, ven_loo_campana_id,
+                    ven_loo_mes_venta_id, ven_loo_n_certificado)
+       DO UPDATE SET
+         ven_loo_rut_cliente = EXCLUDED.ven_loo_rut_cliente,
+         ven_loo_datos = EXCLUDED.ven_loo_datos,
+         ven_loo_fecha_captura = now();`,
+      [tablaOrigen, campanaID, MesVentaID, certificado, rut, JSON.stringify(filasRaw)]
+    );
+  } catch (error) {
+    console.error(`❌ Error guardando raw Looker (${tablaOrigen} cert ${certificado}):`, error.message);
+  }
+}
+
 // Limpia locks stale que impiden lanzar Chrome si una corrida anterior
 // (o una sesión de escritorio) murió sin cerrar limpiamente.
 function limpiarLockPerfilChrome(profileDir) {
@@ -300,12 +347,22 @@ const capturaLooker = async () => {
       const fechaCompraRaw = row[8];
       const sucursal = row[11];
       if (!porCertificado.has(certificado)) {
-        porCertificado.set(certificado, { rut, fechaCompraRaw, sucursal, count: 0 });
+        porCertificado.set(certificado, { rut, fechaCompraRaw, sucursal, count: 0, filasRaw: [] });
       }
-      porCertificado.get(certificado).count++;
+      const info = porCertificado.get(certificado);
+      info.count++;
+      info.filasRaw.push(filaAObjeto(VENTAS_HEADERS, row));
     }
 
     for (const [certificado, info] of porCertificado) {
+      await guardaRawLooker({
+        tablaOrigen: "Ventas",
+        certificado,
+        rut: info.rut,
+        filasRaw: info.filasRaw,
+        MesVentaID,
+      });
+
       let fecha_contrato;
       try {
         fecha_contrato = await convertirFecha(info.fechaCompraRaw);
@@ -337,6 +394,14 @@ const capturaLooker = async () => {
       const sucursal = row[4];
       const fechaSuscripcionRaw = row[6];
       const beneficiarios = parseInt(row[11]) || 0;
+
+      await guardaRawLooker({
+        tablaOrigen: "Bajas",
+        certificado,
+        rut,
+        filasRaw: [filaAObjeto(BAJAS_HEADERS, row)],
+        MesVentaID,
+      });
 
       let fecha_contrato;
       try {
