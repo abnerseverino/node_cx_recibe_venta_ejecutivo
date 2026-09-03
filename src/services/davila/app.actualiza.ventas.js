@@ -141,17 +141,35 @@ const capturaLooker = async () => {
             `📌Fila ${index}: ID: ${id}, Rut: ${rut}, Fecha: ${fecha_contrato}, Estado: ${estado}, Beneficiarios: ${beneficiarios}`
           );
 
-          const query1 = `
+          // Si el reporte marca la venta como Inactivo (=> RETRACTO), se
+          // fuerza el estado sin importar el estado actual (incluso si ya
+          // estaba EXITOSO). Para cualquier otro estado se mantiene la
+          // protección de no pisar estados finales ya definidos.
+          const forzarRetracto = estado === "RETRACTO";
+
+          const query1 = forzarRetracto
+            ? `
             UPDATE genesys_backend.cx_venta_ejecutivo
-            SET 
+            SET
               ven_eje_respuesta_fecha_contratacion = $1,
               ven_eje_respuesta_beneficiarios = $2,
               ven_eje_respuesta_estado = $3
             WHERE
-              ven_eje_campana_id IN (29, 37, 45) AND 
-              ven_eje_mes_venta_id = $4 AND 
+              ven_eje_campana_id IN (29, 37, 45) AND
+              ven_eje_mes_venta_id = $4 AND
+              ven_eje_rut_cliente = $5;
+          `
+            : `
+            UPDATE genesys_backend.cx_venta_ejecutivo
+            SET
+              ven_eje_respuesta_fecha_contratacion = $1,
+              ven_eje_respuesta_beneficiarios = $2,
+              ven_eje_respuesta_estado = $3
+            WHERE
+              ven_eje_campana_id IN (29, 37, 45) AND
+              ven_eje_mes_venta_id = $4 AND
               ven_eje_rut_cliente = $5 AND
-              ven_eje_respuesta_estado NOT IN 
+              ven_eje_respuesta_estado NOT IN
               ('DUPLICADO','RECHAZA VENTA','CORTA',
                'RECHAZADA POR COMPRA EN CYBER','EXITOSO',
                'TIMEOUT','RECHAZADA POR CALIDAD');
