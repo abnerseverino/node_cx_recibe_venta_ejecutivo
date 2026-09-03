@@ -68,6 +68,19 @@ async function guardaRawLooker({ tablaOrigen, certificado, rut, filasRaw, MesVen
   }
 }
 
+/**
+ * El snapshot crudo (cx_venta_looker) debe quedar etiquetado con el mes al
+ * que realmente pertenece esa fila (según su propia fecha), NO con el mes
+ * que se le pasó por --mes al script: si no, correr el mismo script con
+ * --mes=8 y --mes=9 guarda la misma data del reporte duplicada bajo dos
+ * mes_venta_id distintos en vez de actualizar un único snapshot.
+ */
+async function mesVentaIdDeFecha(fechaISO) {
+  const [ano, mes] = fechaISO.split("-").map(Number);
+  const res = await pool.query(querys.obtieneMesID(ano, mes));
+  return res.rows?.[0]?.mes_venta_id || null;
+}
+
 // Limpia locks stale que impiden lanzar Chrome si una corrida anterior
 // (o una sesión de escritorio) murió sin cerrar limpiamente.
 function limpiarLockPerfilChrome(profileDir) {
@@ -355,20 +368,25 @@ const capturaLooker = async () => {
     }
 
     for (const [certificado, info] of porCertificado) {
-      await guardaRawLooker({
-        tablaOrigen: "Ventas",
-        certificado,
-        rut: info.rut,
-        filasRaw: info.filasRaw,
-        MesVentaID,
-      });
-
       let fecha_contrato;
       try {
         fecha_contrato = await convertirFecha(info.fechaCompraRaw);
       } catch (error) {
         console.warn(`⚠️ Certificado ${certificado}: fecha inválida "${info.fechaCompraRaw}" (${error.message})`);
         continue;
+      }
+
+      const mesVentaIdFila = await mesVentaIdDeFecha(fecha_contrato);
+      if (mesVentaIdFila) {
+        await guardaRawLooker({
+          tablaOrigen: "Ventas",
+          certificado,
+          rut: info.rut,
+          filasRaw: info.filasRaw,
+          MesVentaID: mesVentaIdFila,
+        });
+      } else {
+        console.warn(`⚠️ Certificado ${certificado}: no hay mes_venta para ${fecha_contrato}, no se guarda snapshot crudo.`);
       }
 
       await actualizaRegistro({
@@ -393,15 +411,8 @@ const capturaLooker = async () => {
       const rut = row[1];
       const sucursal = row[4];
       const fechaSuscripcionRaw = row[6];
+      const fechaBajaRaw = row[7];
       const beneficiarios = parseInt(row[11]) || 0;
-
-      await guardaRawLooker({
-        tablaOrigen: "Bajas",
-        certificado,
-        rut,
-        filasRaw: [filaAObjeto(BAJAS_HEADERS, row)],
-        MesVentaID,
-      });
 
       let fecha_contrato;
       try {
@@ -409,6 +420,28 @@ const capturaLooker = async () => {
       } catch (error) {
         console.warn(`⚠️ Certificado ${certificado}: fecha inválida "${fechaSuscripcionRaw}" (${error.message})`);
         continue;
+      }
+
+      // El snapshot crudo de Bajas se etiqueta por "Fecha baja" (cuándo se
+      // dio de baja), no por "Fecha suscripción" (que sigue siendo la que
+      // se usa para ven_eje_respuesta_fecha_contratacion en actualizaRegistro).
+      let mesVentaIdFila = null;
+      try {
+        const fechaBajaISO = await convertirFecha(fechaBajaRaw);
+        mesVentaIdFila = await mesVentaIdDeFecha(fechaBajaISO);
+      } catch (error) {
+        console.warn(`⚠️ Certificado ${certificado}: Fecha baja inválida "${fechaBajaRaw}" (${error.message})`);
+      }
+      if (mesVentaIdFila) {
+        await guardaRawLooker({
+          tablaOrigen: "Bajas",
+          certificado,
+          rut,
+          filasRaw: [filaAObjeto(BAJAS_HEADERS, row)],
+          MesVentaID: mesVentaIdFila,
+        });
+      } else if (fechaBajaRaw) {
+        console.warn(`⚠️ Certificado ${certificado}: no hay mes_venta para Fecha baja "${fechaBajaRaw}", no se guarda snapshot crudo.`);
       }
 
       await actualizaRegistro({
