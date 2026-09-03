@@ -185,15 +185,21 @@ const capturaLooker = async () => {
           const result1 = await pool.query(query1, values1);
           console.log(`✅ Query1: actualizados ${result1.rowCount}`);
 
+          // Sin la protección de estados finales: certificado y
+          // beneficiarios no son un estado de negocio, así que se
+          // refrescan siempre, incluso en filas ya EXITOSO donde Query1 no
+          // llega a tocarlas.
           const query2 = `
             UPDATE genesys_backend.cx_venta_ejecutivo
-            SET ven_eje_respuesta_beneficiarios = $1
+            SET
+              ven_eje_respuesta_beneficiarios = $1,
+              ven_eje_n_certificado = $4
             WHERE
-              ven_eje_campana_id IN (29, 37, 45) AND 
-              ven_eje_mes_venta_id = $2 AND 
+              ven_eje_campana_id IN (29, 37, 45) AND
+              ven_eje_mes_venta_id = $2 AND
               ven_eje_rut_cliente = $3;
           `;
-          const values2 = [beneficiarios, MesVentaID, rut];
+          const values2 = [beneficiarios, MesVentaID, rut, certificado];
           const result2 = await pool.query(query2, values2);
           console.log(`✅ Query2: actualizados ${result2.rowCount}`);
 

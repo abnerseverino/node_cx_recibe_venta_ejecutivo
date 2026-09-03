@@ -190,17 +190,22 @@ async function actualizaRegistro({ certificado, rut, fecha_contrato, beneficiari
   }
 
   try {
+    // Sin la protección de estados finales: certificado y beneficiarios no
+    // son un estado de negocio, así que se refrescan siempre, incluso en
+    // filas ya EXITOSO donde Query1 no llega a tocarlas.
     const query2 = `
       UPDATE genesys_backend.cx_venta_ejecutivo
-      SET ven_eje_respuesta_beneficiarios = $1
+      SET
+        ven_eje_respuesta_beneficiarios = $1,
+        ven_eje_n_certificado = $4
       WHERE
         ven_eje_campana_id = ${campanaID} AND
         ven_eje_mes_venta_id = $2 AND
         ven_eje_rut_cliente = $3;
     `;
-    await pool.query(query2, [beneficiarios, MesVentaID, rut]);
+    await pool.query(query2, [beneficiarios, MesVentaID, rut, certificado]);
   } catch (error) {
-    console.error(`❌ Error Query2 (beneficiarios) rut ${rut}:`, error.message);
+    console.error(`❌ Error Query2 (beneficiarios/certificado) rut ${rut}:`, error.message);
   }
 
   try {
