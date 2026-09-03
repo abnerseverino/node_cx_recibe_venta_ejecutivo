@@ -135,6 +135,7 @@ const capturaLooker = async () => {
           const beneficiarios = parseInt(row[7]) || 0;
 
           if (estado === "Activo") estado = "EXITOSO";
+          else if (estado === "Inactivo") estado = "RETRACTO";
 
           console.log(
             `📌Fila ${index}: ID: ${id}, Rut: ${rut}, Fecha: ${fecha_contrato}, Estado: ${estado}, Beneficiarios: ${beneficiarios}`
