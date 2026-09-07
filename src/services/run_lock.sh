@@ -14,9 +14,15 @@ LOGFILE="${2:-/home/ubuntu/node_procesos/logs/run_venta_ejecutivo_lock.log}"
 LOCK_KEY="${3:-$(basename "$SCRIPT" .js)}"
 
 if [[ -z "$SCRIPT" ]]; then
-  echo "Uso: $0 /ruta/script.js [/ruta/log.log] [clave_de_lock]"
+  echo "Uso: $0 /ruta/script.js [/ruta/log.log] [clave_de_lock] [-- argumentos extra para node]"
   exit 2
 fi
+
+# Argumentos extra (4to en adelante) se pasan tal cual al script de node,
+# ej. --ano=2026 --mes=8 para una corrida de mes cerrado.
+n_shift=$#
+if [[ "$n_shift" -gt 3 ]]; then n_shift=3; fi
+shift "$n_shift"
 
 # Lock por script individual (o por clave explícita): evita que una
 # corrida se solape con la siguiente de si misma cuando se demora más
@@ -51,10 +57,11 @@ fi
 # Tomar lock propio del script (espera hasta 20 min; si sigue ocupado, se
 # omite esta corrida en vez de acumular instancias de Chrome compitiendo).
 log "Intentando tomar lock propio (espera max 1200s)..."
-if /usr/bin/flock -w 1200 "$LOCK_FILE" bash -lc "
-  echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] LOCK OK, ejecutando node...\";
-  /usr/bin/node \"$SCRIPT\"
-" >> "$LOGFILE" 2>&1; then
+if /usr/bin/flock -w 1200 "$LOCK_FILE" bash -c '
+  script="$1"; shift
+  echo "[$(date "+%Y-%m-%d %H:%M:%S")] LOCK OK, ejecutando node... $script $*"
+  exec /usr/bin/node "$script" "$@"
+' bash "$SCRIPT" "$@" >> "$LOGFILE" 2>&1; then
   log "DONE OK (exit=0)"
 else
   code=$?
