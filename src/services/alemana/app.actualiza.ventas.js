@@ -183,6 +183,15 @@ const extraerDatos = async () => {
     const MAX_PAGINAS = 100;
     let pageNumber = 1;
 
+    // Un mismo rut puede tener más de una propuesta (ej. lo rechazan y
+    // vuelve a postular). Como el portal lista de más reciente a más
+    // antigua, la PRIMERA vez que se ve un rut en esta corrida es su
+    // propuesta más reciente; cualquier propuesta más antigua del mismo
+    // rut que aparezca después se ignora, para que no le pise el estado
+    // a la más reciente (antes ganaba la que se procesaba último, o sea
+    // la más antigua — al revés de lo que corresponde).
+    const rutsYaProcesados = new Set();
+
     while (true) {
       console.log(`\n📄 Extrayendo datos de la página ${pageNumber}...`);
 
@@ -196,6 +205,14 @@ const extraerDatos = async () => {
       for (const [idx, row] of rows.entries()) {
         if (row.length < 6) {
           console.log(`⚠ Registro incompleto idx=${idx}:`, row);
+          continue;
+        }
+
+        const rutBase = (row[1] || "").split("-")[0]?.trim();
+        if (rutBase && rutsYaProcesados.has(rutBase)) {
+          console.log(
+            `⏭️  Rut=${row[1]} Propuesta=${row[0]} omitido: ya se aplicó una propuesta más reciente de este rut en esta corrida.`
+          );
           continue;
         }
 
@@ -251,6 +268,8 @@ const extraerDatos = async () => {
             error.message
           );
         }
+
+        if (rutBase) rutsYaProcesados.add(rutBase);
       }
 
       if (pageNumber >= MAX_PAGINAS) {
