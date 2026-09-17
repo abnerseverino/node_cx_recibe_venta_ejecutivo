@@ -184,13 +184,14 @@ const extraerDatos = async () => {
     let pageNumber = 1;
 
     // Un mismo rut puede tener más de una propuesta (ej. lo rechazan y
-    // vuelve a postular). Como el portal lista de más reciente a más
-    // antigua, la PRIMERA vez que se ve un rut en esta corrida es su
-    // propuesta más reciente; cualquier propuesta más antigua del mismo
-    // rut que aparezca después se ignora, para que no le pise el estado
-    // a la más reciente (antes ganaba la que se procesaba último, o sea
-    // la más antigua — al revés de lo que corresponde).
-    const rutsYaProcesados = new Set();
+    // vuelve a postular, o tiene una propuesta nueva sin relación con una
+    // ya emitida). Regla: si CUALQUIERA de las propuestas del rut quedó
+    // EMITIDA (=> EXITOSO), esa gana siempre, sin importar si hay otra más
+    // reciente que no llegó a buen puerto — una venta ya concretada no la
+    // debe tapar un intento posterior fallido. Entre propuestas que NO son
+    // EXITOSO, gana la más reciente (el portal lista de más reciente a más
+    // antigua, así que la primera que se ve es la más nueva).
+    const rutsYaProcesados = new Map(); // rutBase -> { esExitoso: boolean }
 
     while (true) {
       console.log(`\n📄 Extrayendo datos de la página ${pageNumber}...`);
@@ -209,9 +210,11 @@ const extraerDatos = async () => {
         }
 
         const rutBase = (row[1] || "").split("-")[0]?.trim();
-        if (rutBase && rutsYaProcesados.has(rutBase)) {
+        const yaProcesado = rutBase ? rutsYaProcesados.get(rutBase) : undefined;
+
+        if (yaProcesado?.esExitoso) {
           console.log(
-            `⏭️  Rut=${row[1]} Propuesta=${row[0]} omitido: ya se aplicó una propuesta más reciente de este rut en esta corrida.`
+            `⏭️  Rut=${row[1]} Propuesta=${row[0]} omitido: ya se aplicó una propuesta EMITIDA de este rut en esta corrida (nada le gana a EXITOSO).`
           );
           continue;
         }
@@ -222,6 +225,15 @@ const extraerDatos = async () => {
         const estadoRaw = row[5]; // ✅ Estado está en índice 5 (no 4)
 
         const { estado, key: estadoKey } = mapearEstado(estadoRaw);
+
+        // Ya se procesó una propuesta más reciente de este rut (no EXITOSO)
+        // y esta tampoco lo es: no aporta nada mejor, se omite.
+        if (yaProcesado && estado !== "EXITOSO") {
+          console.log(
+            `⏭️  Rut=${rutCliente} Propuesta=${numero_propuesta} omitido: ya se aplicó una propuesta más reciente de este rut en esta corrida.`
+          );
+          continue;
+        }
 
         if (estado === "NO DEFINIDO") {
           console.log("❗Estado NO DEFINIDO detectado:", {
@@ -269,7 +281,7 @@ const extraerDatos = async () => {
           );
         }
 
-        if (rutBase) rutsYaProcesados.add(rutBase);
+        if (rutBase) rutsYaProcesados.set(rutBase, { esExitoso: estado === "EXITOSO" });
       }
 
       if (pageNumber >= MAX_PAGINAS) {
