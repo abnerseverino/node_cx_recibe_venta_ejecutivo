@@ -4,6 +4,7 @@ const { pool } = require("../../config/conexion");
 const puppeteer = require("puppeteer");
 const { convertirFecha } = require("../../helpers/dates");
 const querys = require("../../data/querys");
+const { esPantallaLoginGoogle, notificaSesionVencida, marcaSesionOk } = require("../../helpers/alertaSesionGoogle");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -67,7 +68,12 @@ const capturaLooker = async () => {
       timeout: 120000,
     });
 
+    if (esPantallaLoginGoogle(page.url())) {
+      await notificaSesionVencida({ script: "davila", urlFinal: page.url() });
+      throw new Error("Sesión de Google vencida: la página redirigió a " + page.url());
+    }
     await page.waitForSelector(".centerColsContainer");
+    marcaSesionOk();
 
     let allRows = [];
     let pageCount = 1;

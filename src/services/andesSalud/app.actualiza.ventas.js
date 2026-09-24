@@ -4,6 +4,7 @@ const { pool } = require("../../config/conexion");
 const puppeteer = require("puppeteer");
 const { convertirFecha } = require("../../helpers/dates");
 const querys = require("../../data/querys");
+const { esPantallaLoginGoogle, notificaSesionVencida, marcaSesionOk } = require("../../helpers/alertaSesionGoogle");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -311,7 +312,12 @@ const capturaLooker = async () => {
     const lookerURL =
       "https://datastudio.google.com/reporting/745213f7-e6f9-498c-b6fa-f053a047f18a/page/p_a1crcxg36d";
     await page.goto(lookerURL, { waitUntil: "networkidle2", timeout: 120000 });
+    if (esPantallaLoginGoogle(page.url())) {
+      await notificaSesionVencida({ script: "andesSalud", urlFinal: page.url() });
+      throw new Error("Sesión de Google vencida: la página redirigió a " + page.url());
+    }
     await page.waitForSelector(".centerColsContainer");
+    marcaSesionOk();
     await sleep(2000);
 
     // Se lee TODO el contenido de ambas tablas primero (solo interacción con
