@@ -4,7 +4,7 @@ const nodemailer = require("nodemailer");
 
 // Mientras la sesión siga vencida, los crons (cada 30 min) fallarían igual
 // todos los días: se manda un solo correo cada este intervalo, no uno por corrida.
-const INTERVALO_MIN_ENTRE_ALERTAS_HORAS = 6;
+const INTERVALO_MIN_ENTRE_ALERTAS_HORAS = 24;
 
 const DIR_ESTADO =
   process.env.ALERTA_ESTADO_DIR || path.resolve(__dirname, "../../../logs");
