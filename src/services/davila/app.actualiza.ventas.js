@@ -18,6 +18,70 @@ const CHROME_PROFILE_DIR = "/home/ubuntu/.config/chrome-profiles/andessalud";
 // el perfil con una versión tan distinta hace crashear Chrome al instante.
 const CHROME_BIN = "/usr/bin/google-chrome";
 
+const campanaID = 29;
+
+// El reporte trae todo el historial (más nuevo primero). La lógica de
+// negocio sobre cx_venta_ejecutivo se aplica solo a las primeras páginas
+// (comportamiento histórico); las siguientes se leen solo para guardar el
+// snapshot en cx_venta_looker hasta cubrir el mes pedido y el anterior.
+const PAGINAS_NEGOCIO = 3;
+const MAX_PAGINAS = 15;
+
+// Encabezados reales de la tabla (mismo orden que las columnas capturadas),
+// usados solo para armar el snapshot crudo de cx_venta_looker (layout
+// verificado el 2026-10-01: 10 columnas).
+const VENTAS_HEADERS = [
+  "N°", "Certificado", "Rut Titular", "Fecha Contratación", "Plan",
+  "Prima Cerrada CLP", "Estado Contratación", "Código Producto", "Canal",
+  "Cantidad Benef.",
+];
+
+function filaAObjeto(headers, row) {
+  const obj = {};
+  headers.forEach((h, i) => (obj[h] = row[i] ?? null));
+  return obj;
+}
+
+/**
+ * Guarda (upsert) el snapshot crudo de un certificado tal como vino del
+ * Looker. Lo usa node_cx_facturacion (davila/app.cierre.mensual.js) para
+ * armar la pre factura del mes. ven_loo_datos es un arreglo (mismo formato
+ * que andesSalud) con un solo elemento: la fila del certificado.
+ */
+async function guardaRawLooker({ certificado, rut, fila, MesVentaID }) {
+  try {
+    await pool.query(
+      `INSERT INTO genesys_backend.cx_venta_looker
+         (ven_loo_cliente, ven_loo_tabla_origen, ven_loo_campana_id,
+          ven_loo_mes_venta_id, ven_loo_n_certificado, ven_loo_rut_cliente,
+          ven_loo_datos, ven_loo_fecha_captura)
+       VALUES ('davila', 'Ventas', $1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (ven_loo_cliente, ven_loo_tabla_origen, ven_loo_campana_id,
+                    ven_loo_mes_venta_id, ven_loo_n_certificado)
+       DO UPDATE SET
+         ven_loo_rut_cliente = EXCLUDED.ven_loo_rut_cliente,
+         ven_loo_datos = EXCLUDED.ven_loo_datos,
+         ven_loo_fecha_captura = now();`,
+      [campanaID, MesVentaID, certificado, rut, JSON.stringify([filaAObjeto(VENTAS_HEADERS, fila)])]
+    );
+  } catch (error) {
+    console.error(`❌ Error guardando raw Looker (cert ${certificado}):`, error.message);
+  }
+}
+
+// El snapshot se etiqueta con el mes de la propia fecha de contratación,
+// no con el --mes del script (ver la misma nota en andesSalud).
+const cacheMesVenta = new Map();
+async function mesVentaIdDeFecha(fechaISO) {
+  const clave = fechaISO.slice(0, 7);
+  if (!cacheMesVenta.has(clave)) {
+    const [ano, mes] = clave.split("-").map(Number);
+    const res = await pool.query(querys.obtieneMesID(ano, mes));
+    cacheMesVenta.set(clave, res.rows?.[0]?.mes_venta_id || null);
+  }
+  return cacheMesVenta.get(clave);
+}
+
 function limpiarLockPerfilChrome(profileDir) {
   for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
     const p = path.join(profileDir, f);
@@ -87,7 +151,13 @@ const capturaLooker = async () => {
 
     console.log(`🔍 Total de registros detectados: ${totalRecords}`);
 
-    while (pageCount <= 3) { 
+    // Se lee hasta pasar el primer día del mes anterior al pedido.
+    const corte = new Date(Date.UTC(ano, mes - 2, 1)).toISOString().slice(0, 10);
+    let guardadosLooker = 0;
+
+    while (pageCount <= MAX_PAGINAS) {
+      const aplicaNegocio = pageCount <= PAGINAS_NEGOCIO;
+      let fechaMinPagina = null;
       let registrosCapturados = new Set();
       let intentos = 0;
 
@@ -126,7 +196,7 @@ const capturaLooker = async () => {
 
       for (const [index, row] of registrosPagina.entries()) {
         try {
-          if (row.length < 8) {
+          if (row.length < VENTAS_HEADERS.length) {
             console.warn(`⚠️ Fila ${index} no contiene suficientes columnas, se omitirá.`);
             continue;
           }
@@ -138,7 +208,22 @@ const capturaLooker = async () => {
           const plan = row[4];
           const precio = parseFloat(row[5].replace(/[^0-9.-]+/g, ""));
           let estado = row[6];
-          const beneficiarios = parseInt(row[7]) || 0;
+          // Columna "Cantidad Benef." (la última desde que se agregaron
+          // "Código Producto" y "Canal"; antes era row[7]).
+          const beneficiarios = parseInt(row[9]) || 0;
+
+          if (fecha_contrato && (!fechaMinPagina || fecha_contrato < fechaMinPagina)) {
+            fechaMinPagina = fecha_contrato;
+          }
+          if (fecha_contrato && fecha_contrato >= corte) {
+            const mesFila = await mesVentaIdDeFecha(fecha_contrato);
+            if (mesFila && certificado) {
+              await guardaRawLooker({ certificado, rut, fila: row, MesVentaID: mesFila });
+              guardadosLooker++;
+            }
+          }
+
+          if (!aplicaNegocio) continue;
 
           if (estado === "Activo") estado = "EXITOSO";
           else if (estado === "Inactivo") estado = "RETRACTO";
@@ -231,6 +316,11 @@ const capturaLooker = async () => {
         break;
       }
 
+      if (pageCount >= PAGINAS_NEGOCIO && fechaMinPagina && fechaMinPagina < corte) {
+        console.log(`✅ Se cubrió desde ${corte} (fecha más antigua de la página: ${fechaMinPagina}).`);
+        break;
+      }
+
       const hasNextPage = await page.evaluate(() => {
         const nextButton = document.querySelector(".pageForward");
         return nextButton && !nextButton.classList.contains("disabled");
@@ -261,6 +351,7 @@ const capturaLooker = async () => {
     `;
     await pool.query(ajusteQuery, [MesVentaID]);
     console.log("✅ Ajuste final aplicado a ven_eje_venta_adicional");
+    console.log(`💾 Certificados guardados en cx_venta_looker: ${guardadosLooker}`);
   } catch (error) {
     console.error("❌ Error en la ejecución del script:", error.message);
   } finally {

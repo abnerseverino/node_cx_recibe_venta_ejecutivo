@@ -21,7 +21,7 @@ Zona horaria del servidor: `America/Santiago` (-03/-04). Los horarios son hora l
 
 | Script (`src/services/…`) | Qué hace | Parámetros | Cron en producción |
 |---|---|---|---|
-| `davila/app.actualiza.ventas.js` | Looker (`/page/sAMLE`), tabla única. Campañas 29, 37, 45 (Exámenes y Urgencias / CAR / C2C). Lee máx. 3 páginas. `Inactivo` → RETRACTO forzado | `--ano=YYYY --mes=M` (por defecto mes actual) | `*/30 9-21 * * 1-6` vía `run_lock.sh` (clave `chrome_profile_andessalud`) |
+| `davila/app.actualiza.ventas.js` | Looker (`/page/sAMLE`), tabla única. Campañas 29, 37, 45 (Exámenes y Urgencias / CAR / C2C). Lógica de negocio solo sobre las 3 primeras páginas; lee más páginas (máx. 15) hasta cubrir el mes pedido y el anterior para guardar snapshot crudo en `cx_venta_looker` (`ven_loo_cliente='davila'`, mes por Fecha Contratación; lo usa `node_cx_facturacion` para la pre factura, desde 2026-10-01). `Inactivo` → RETRACTO forzado | `--ano=YYYY --mes=M` (por defecto mes actual) | `*/30 9-21 * * 1-6` vía `run_lock.sh` (clave `chrome_profile_andessalud`) |
 | `andesSalud/app.actualiza.ventas.js` | Looker (`/page/p_a1crcxg36d`), tablas **Ventas** (→ EXITOSO, agrupa por Certificado) y **Bajas** (→ RETRACTO forzado). Campaña 78. Guarda snapshot crudo en `cx_venta_looker` | `--ano --mes` | `*/30 9-21 * * 1-6` vía `run_lock.sh` (misma clave de lock que davila) |
 | `alemana/app.actualiza.ventas.js` | Portal Alemana (login con `ALEMANA_RUT/PASS`), lee hasta `MAX_PAGINAS = 100`. Campañas 34, 35, 44, 65, 50 (Vida, Renta, MACC, EGRA, ACC) | `--ano --mes` | `*/30 9-21 * * 1-6` (node directo, sin lock) |
 | `colmena/app.actualiza.ventas.js` | Lee xlsx de S3 (`bucket-cx-sftp`, prefijo `colmena/in/reportes/`), solo archivos modificados hoy/ayer. Campaña 43. Cruza por Rut; N° Póliza y Fecha Emisión → EXITOSO | `--ano --mes` (no afecta el filtro hoy/ayer) | `0 10 * * *` |
@@ -101,7 +101,7 @@ No encontré proyectos que importen código de este. Dependencias reales entre e
 - Un rut con varias propuestas provocaba que una antigua pisara a la nueva (Alemana): regla EXITOSO-gana implementada (16-sep-2026).
 - RUTs "sin match" a veces difieren solo en el dígito verificador (ej. `16521420-9` vs `-K`): es error de digitación, no bug.
 - `20267014-8` (AndesSalud) sale "Rut no encontrado": es venta de oct-2025, fuera del mes en curso; esperado.
-- En davila, `.cell-value` row[0] es el número de fila de Looker (desplaza los índices de columnas).
+- En davila, `.cell-value` row[0] es el número de fila de Looker (desplaza los índices de columnas). Layout verificado 2026-10-01 (10 columnas): N°, Certificado, Rut Titular, Fecha Contratación, Plan, Prima Cerrada CLP, Estado Contratación, Código Producto, Canal, Cantidad Benef. Beneficiarios = row[9]; hasta el 2026-10-01 se leía row[7] ("Código Producto") y `ven_eje_respuesta_beneficiarios` quedaba en 0 (corregido y desplegado ese día; agosto quedó sin corregir a propósito).
 - Hay un caso abierto sin cerrar: rut `12896548-3` (Excel BAJAS DAVILA 08.2026, fila 28) no está en campaña 29; falta revisar campañas 37 y 45.
 
 ## 9. Convenciones de trabajo
