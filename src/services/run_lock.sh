@@ -60,7 +60,7 @@ log "Intentando tomar lock propio (espera max 1200s)..."
 if /usr/bin/flock -w 1200 "$LOCK_FILE" bash -c '
   script="$1"; shift
   echo "[$(date "+%Y-%m-%d %H:%M:%S")] LOCK OK, ejecutando node... $script $*"
-  exec /usr/bin/node "$script" "$@"
+  exec /home/ubuntu/.nvm/versions/node/v22.23.4/bin/node "$script" "$@"
 ' bash "$SCRIPT" "$@" >> "$LOGFILE" 2>&1; then
   log "DONE OK (exit=0)"
 else

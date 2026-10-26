@@ -284,6 +284,49 @@ async function actualizaRegistro({ certificado, rut, fecha_contrato, beneficiari
   } catch {}
 }
 
+// Las bajas de AndesSalud también se registran en cx_venta_ejecutivo_baja (la
+// misma tabla que llena app.captura.bajas.qp.js con las demás organizaciones).
+// La tabla Bajas del reporte no trae código de producto ni canal: el código se
+// deduce del plan (plan único de la campaña 78) y el canal es siempre CONNECTX.
+const ORGANIZACION_BAJAS = "Andes Salud";
+const INFORMADOR_BAJAS = "QUEPLAN";
+const CANAL_BAJAS = "CONNECTX";
+const CODIGO_PRODUCTO_POR_PLAN = {
+  "plan exámenes 50% andes salud": "QPS314",
+};
+
+/**
+ * Inserta la baja si no existe ya (mismo certificado + rut + fecha de baja +
+ * organización). Nunca actualiza ni borra. Devuelve true si insertó.
+ */
+async function guardaBajaQueplan({ certificado, rut, fecha_contrato, fecha_baja, plan, beneficiarios }) {
+  try {
+    const codigo = CODIGO_PRODUCTO_POR_PLAN[String(plan || "").trim().toLowerCase()] || null;
+    const res = await pool.query(
+      `INSERT INTO genesys_backend.cx_venta_ejecutivo_baja
+         (ven_eje_baj_certificado, ven_eje_baj_rut, ven_eje_baj_fecha_contratacion,
+          ven_eje_baj_fecha_baja, ven_eje_baj_plan, ven_eje_baj_codigo_producto,
+          ven_eje_baj_canal, ven_eje_baj_organizacion, ven_eje_baj_beneficiarios,
+          ven_eje_baj_informador)
+       SELECT $1::varchar, $2::varchar, $3::date, $4::date, $5::varchar, $6::varchar,
+              $7::varchar, $8::varchar, $9::int, $10::varchar
+       WHERE NOT EXISTS (
+         SELECT 1 FROM genesys_backend.cx_venta_ejecutivo_baja b
+         WHERE b.ven_eje_baj_certificado = $1 AND b.ven_eje_baj_rut = $2
+           AND b.ven_eje_baj_fecha_baja = $4 AND b.ven_eje_baj_organizacion = $8)`,
+      [
+        String(certificado).trim(), String(rut).trim().toUpperCase(), fecha_contrato, fecha_baja,
+        String(plan || "").trim(), codigo, CANAL_BAJAS, ORGANIZACION_BAJAS, beneficiarios, INFORMADOR_BAJAS,
+      ]
+    );
+    if (res.rowCount > 0) console.log(`🧾 Baja registrada en cx_venta_ejecutivo_baja: Cert ${certificado} Rut ${rut} (${fecha_baja})`);
+    return res.rowCount > 0;
+  } catch (error) {
+    console.error(`❌ Error guardando baja (cert ${certificado}):`, error.message);
+    return false;
+  }
+}
+
 const capturaLooker = async () => {
   let browser;
   try {
@@ -432,11 +475,23 @@ const capturaLooker = async () => {
       // dio de baja), no por "Fecha suscripción" (que sigue siendo la que
       // se usa para ven_eje_respuesta_fecha_contratacion en actualizaRegistro).
       let mesVentaIdFila = null;
+      let fecha_baja = null;
       try {
-        const fechaBajaISO = await convertirFecha(fechaBajaRaw);
-        mesVentaIdFila = await mesVentaIdDeFecha(fechaBajaISO);
+        fecha_baja = await convertirFecha(fechaBajaRaw);
+        mesVentaIdFila = await mesVentaIdDeFecha(fecha_baja);
       } catch (error) {
         console.warn(`⚠️ Certificado ${certificado}: Fecha baja inválida "${fechaBajaRaw}" (${error.message})`);
+      }
+
+      if (fecha_baja) {
+        await guardaBajaQueplan({
+          certificado,
+          rut,
+          fecha_contrato,
+          fecha_baja,
+          plan: row[3],
+          beneficiarios,
+        });
       }
       if (mesVentaIdFila) {
         await guardaRawLooker({
