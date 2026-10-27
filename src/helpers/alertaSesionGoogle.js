@@ -75,12 +75,12 @@ async function notificaSesionVencida({ script, urlFinal, forzar = false }) {
     await transporter.sendMail({
       from: process.env.ALERTA_MAIL_FROM || process.env.SMTP_USER,
       to: destino,
-      subject: "Sesión de Google vencida en el perfil de Looker (AndesSalud / Davila)",
+      subject: "Sesión de Google vencida en el perfil de Looker (AndesSalud / Davila / bajas QP)",
       text: [
         `Detectado el ${cuando} (hora Chile) por ${script}.`,
         "",
         "Google está pidiendo volver a iniciar sesión en el perfil chrome-profiles/andessalud,",
-        "así que las actualizaciones de AndesSalud y Davila NO se están ejecutando.",
+        "así que las actualizaciones de AndesSalud y Davila y la captura de bajas QP NO se están ejecutando.",
         `Página a la que llegó el script: ${urlFinal}`,
         "",
         "Cómo solucionarlo (por VNC en server-cx, en una terminal):",
